@@ -6,11 +6,13 @@ import flash.events.Event;
 import flash.events.KeyboardEvent;
 import flash.sampler.Sample;
 import flash.sampler.StackFrame;
-import flash.sampler.clearSamples;
 import flash.sampler.getSamples;
+import flash.sampler.pauseSampling;
+import flash.sampler.clearSamples;
 import flash.sampler.startSampling;
 import flash.sampler.stopSampling;
-import flash.sampler.getSampleCount;
+import flash.utils.Timer;
+import flash.events.TimerEvent;
 import flash.ui.Keyboard;
 
 public class Flofiler extends Sprite
@@ -36,24 +38,39 @@ public class Flofiler extends Sprite
                 toggleSampling();
             });
         trace("Flofiler listening");
+        var dumper :Timer = new Timer(50);
+
+        var adding :Boolean;
+        dumper.addEventListener(TimerEvent.TIMER, function (..._) :void {
+            if (!_root || adding) return;
+            adding = true;
+            pauseSampling();
+            addSamples(_root);
+            if (_sampling) {
+                startSampling();
+            } else {
+                _root.dump();
+                _root = null;
+            }
+            adding = false;
+        });
+
+        // starts the timer ticking
+        dumper.start();
     }
 
     protected function toggleSampling () :void
     {
         if (!_sampling) {
+            _root = new Frame("root");
             startSampling();
             trace("Flofiler sampling");
-        } else {
-            dumpSamples();
-            stopSampling();// stop also clears out the samples
-            trace("Flofiler idle");
         }
         _sampling = !_sampling;
     }
 
-    protected static function dumpSamples () :void
+    protected static function addSamples (rootFrame :Frame) :void
     {
-        const rootFrame :Frame = new Frame("root");
         for each (var s :Sample in getSamples()) {
             if (s== null || s.stack == null) { continue; }// memory samples have no stack
             var pos :Frame = rootFrame;
@@ -76,9 +93,10 @@ public class Flofiler extends Sprite
             }
             pos.ownMicros += s.time;
         }
-        rootFrame.dump();
+        clearSamples();
     }
 
+    protected var _root :Frame;
     protected var _sampling :Boolean;
 }
 }
