@@ -4,6 +4,9 @@ import flash.display.LoaderInfo;
 import flash.display.Sprite;
 import flash.events.Event;
 import flash.events.KeyboardEvent;
+import flash.net.LocalConnection;
+import flash.sampler.DeleteObjectSample;
+import flash.sampler.NewObjectSample;
 import flash.sampler.Sample;
 import flash.sampler.StackFrame;
 import flash.sampler.getSamples;
@@ -11,9 +14,12 @@ import flash.sampler.pauseSampling;
 import flash.sampler.clearSamples;
 import flash.sampler.startSampling;
 import flash.sampler.stopSampling;
+import flash.utils.Dictionary;
 import flash.utils.Timer;
 import flash.events.TimerEvent;
 import flash.ui.Keyboard;
+
+import flash.system.System;
 
 public class Flofiler extends Sprite
 {
@@ -44,13 +50,16 @@ public class Flofiler extends Sprite
         dumper.addEventListener(TimerEvent.TIMER, function (..._) :void {
             if (!_root || adding) return;
             adding = true;
+
             pauseSampling();
-            addSamples(_root);
+            addSamples(_root, _allocs);
             if (_sampling) {
                 startSampling();
             } else {
                 _root.dump();
+                dumpAllocs();
                 _root = null;
+                _allocs = null;
             }
             adding = false;
         });
@@ -59,20 +68,78 @@ public class Flofiler extends Sprite
         dumper.start();
     }
 
+    protected function dumpAllocs () :void
+    {
+        trace("Allocations...");
+        trace("Class : allocatedCount : remainingCount : remainingSize");
+        var summary :Dictionary = new Dictionary();
+        for each (var data :Array in _allocs) {
+            var sumArr :Array = summary[data[0]];
+            if (sumArr != null) {
+                sumArr[0]++;
+                if (!data[2]) {
+                    sumArr[1]++;
+                    sumArr[2] += data[1];
+                }
+            } else {
+                summary[data[0]] = [1, data[2] ? 0 : 1, data[2] ? 0 : data[1]];
+            }
+        }
+
+        var entries :Array = [];
+        for (var key :Object in summary) {
+            entries.push(new MemoryEntry(key, summary[key][0], summary[key][1], summary[key][2]));
+        }
+
+        entries.sortOn("size", Array.DESCENDING | Array.NUMERIC);
+
+        for each (var entry :MemoryEntry in entries) {
+            trace(entry.toString());
+        }
+    }
+
     protected function toggleSampling () :void
     {
         if (!_sampling) {
             _root = new Frame("root");
+            _allocs = new Dictionary();
             startSampling();
             trace("Flofiler sampling");
+        } else {
+            function forceGC():void {
+                // Magical hack to force GC to occur IMMEDIATELY.
+                // Evidently, System.gc() waits for the next frame.
+                try {
+                    new LocalConnection().connect("bdebdd96-7bf8-407b-bec9-8336b2b0c329");
+                    new LocalConnection().connect("bdebdd96-7bf8-407b-bec9-8336b2b0c329");
+                }
+                catch (error:Error) {
+                }
+            };
+
+            forceGC();
         }
         _sampling = !_sampling;
     }
 
-    protected static function addSamples (rootFrame :Frame) :void
+    protected static function addSamples (rootFrame :Frame, allocs :Dictionary) :void
     {
         for each (var s :Sample in getSamples()) {
-            if (s== null || s.stack == null) { continue; }// memory samples have no stack
+            var id :int;
+            if (s is NewObjectSample) {
+                id = NewObjectSample(s).id;
+                allocs[id] = [NewObjectSample(s).type, NewObjectSample(s)["size"], false];
+            } else if (s is DeleteObjectSample) {
+                id = DeleteObjectSample(s).id;
+                if (allocs[id] != null) {
+                    allocs[id][2] = true;
+                }
+            }
+            
+            if (s == null || s.stack == null) {
+                continue;
+            }
+
             var pos :Frame = rootFrame;
             for (var idx :int = s.stack.length; idx >= 0; idx--) {
                 var frame :StackFrame = s.stack[idx] as StackFrame;
@@ -97,6 +164,28 @@ public class Flofiler extends Sprite
     }
 
     protected var _root :Frame;
+    protected var _allocs :Dictionary;
     protected var _sampling :Boolean;
 }
+}
+
+class MemoryEntry
+{
+    public var type :Object;
+    public var items :int;
+    public var undeleted :int;
+    public var size :int;
+
+    public function MemoryEntry (type :Object, items :int, undeleted :int, size :int)
+    {
+        this.type = type;
+        this.items = items;
+        this.undeleted = undeleted;
+        this.size = size;
+    }
+
+    public function toString () :String
+    {
+        return type + " : " + items + " : " + undeleted + " : " + size;
+    }
 }
